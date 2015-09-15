@@ -36,7 +36,7 @@ type Listener interface {
 type StreamProvider interface {
 	NewStream(http.Header) (Stream, error)
 	Close() error
-	Listen() Listener
+	Listen(StreamHandler) Listener
 }
 ~~~
 
