@@ -17,6 +17,7 @@ type spdyStream struct {
 
 type spdyStreamListener struct {
 	listenChan <-chan *spdyStream
+	handler    streams.StreamHandler
 }
 
 type spdyStreamProvider struct {
@@ -54,16 +55,14 @@ func (p *spdyStreamProvider) newStreamHandler(stream *spdystream.Stream) {
 	s := &spdyStream{
 		stream: stream,
 	}
-	returnHeaders := http.Header{}
-	var finish bool
+
 	select {
 	case <-p.closeChan:
-		returnHeaders.Set(":status", "502")
-		finish = true
+		// Do not set handlers on closed providers, new streams
+		// should not be handled by the provider
+		stream.SendReply(http.Header{}, true)
 	case p.listenChan <- s:
-		returnHeaders.Set(":status", "200")
 	}
-	stream.SendReply(returnHeaders, finish)
 }
 
 func (p *spdyStreamProvider) NewStream(headers http.Header) (streams.Stream, error) {
@@ -79,18 +78,44 @@ func (p *spdyStreamProvider) Close() error {
 	return p.conn.Close()
 }
 
-func (p *spdyStreamProvider) Listen() streams.Listener {
+func nilHandler(http.Header) (http.Header, bool, error) {
+	return http.Header{}, true, nil
+}
+
+func (p *spdyStreamProvider) Listen(handler streams.StreamHandler) streams.Listener {
+	if handler == nil {
+		handler = nilHandler
+	}
 	return &spdyStreamListener{
 		listenChan: p.listenChan,
+		handler:    handler,
 	}
 }
 
 func (l *spdyStreamListener) Accept() (streams.Stream, error) {
-	stream := <-l.listenChan
-	if stream == nil {
-		return nil, io.EOF
+	for {
+		s := <-l.listenChan
+		if s == nil {
+			return nil, io.EOF
+		}
+		replyHeaders, accept, err := l.handler(s.Headers())
+		if err != nil {
+			// Send reply but only return original handler error
+			s.stream.SendReply(replyHeaders, !accept)
+			return nil, err
+		}
+		if !accept {
+			if err := s.stream.SendReply(replyHeaders, true); err != nil {
+				return nil, err
+			}
+			continue
+		} else {
+			if err := s.stream.SendReply(replyHeaders, false); err != nil {
+				return nil, err
+			}
+		}
+		return s, nil
 	}
-	return stream, nil
 }
 
 func (s *spdyStream) Read(b []byte) (int, error) {
