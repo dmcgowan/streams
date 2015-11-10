@@ -15,29 +15,46 @@ type spdyStream struct {
 	stream *spdystream.Stream
 }
 
+type acceptStream struct {
+	s   *spdyStream
+	err error
+}
+
 type spdyStreamListener struct {
-	listenChan <-chan *spdyStream
-	handler    streams.StreamHandler
+	listenChan <-chan acceptStream
 }
 
 type spdyStreamProvider struct {
 	conn       *spdystream.Connection
 	closeChan  chan struct{}
-	listenChan chan *spdyStream
+	listenChan chan acceptStream
+	handler    StreamHandler
 }
+
+// StreamHandler is a function to handle a new stream
+// by adding response headers and whether the stream
+// should be accepted. If a stream is not accepted, it
+// will not be returned by an accept on the listener.
+// Any error returned by the handler should be returned
+// on accept.
+type StreamHandler func(http.Header) (http.Header, bool, error)
 
 // NewSpdyStreamProvider creates a stream provider by starting a spdy
 // session on the given connection. The server argument is used to
 // determine whether the spdy connection is the client or server side.
-func NewSpdyStreamProvider(conn net.Conn, server bool) (streams.StreamProvider, error) {
+func NewSpdyStreamProvider(conn net.Conn, server bool, handler StreamHandler) (streams.StreamProvider, error) {
 	spdyConn, spdyErr := spdystream.NewConnection(conn, server)
 	if spdyErr != nil {
 		return nil, spdyErr
 	}
+	if handler == nil {
+		handler = nilHandler
+	}
 	provider := &spdyStreamProvider{
 		conn:       spdyConn,
 		closeChan:  make(chan struct{}),
-		listenChan: make(chan *spdyStream),
+		listenChan: make(chan acceptStream),
+		handler:    handler,
 	}
 	go spdyConn.Serve(provider.newStreamHandler)
 	go func() {
@@ -52,16 +69,36 @@ func NewSpdyStreamProvider(conn net.Conn, server bool) (streams.StreamProvider, 
 }
 
 func (p *spdyStreamProvider) newStreamHandler(stream *spdystream.Stream) {
-	s := &spdyStream{
-		stream: stream,
+	as := acceptStream{
+		s: &spdyStream{
+			stream: stream,
+		},
+	}
+
+	replyHeaders, accept, err := p.handler(as.s.Headers())
+	if err != nil {
+		// Send reply but only return original handler error, ignore reply error
+		as.s.stream.SendReply(replyHeaders, !accept)
+		// Do not return original stream since it has been closed
+		as.s = nil
+		as.err = err
+	}
+	if !accept {
+		// Not accepted, error will also be ignored
+		as.s.stream.SendReply(replyHeaders, true)
+		return
+	} else {
+		as.err = as.s.stream.SendReply(replyHeaders, false)
+		// Do no clear original stream since it is stil open on reply error
 	}
 
 	select {
 	case <-p.closeChan:
-		// Do not set handlers on closed providers, new streams
-		// should not be handled by the provider
-		stream.SendReply(http.Header{}, true)
-	case p.listenChan <- s:
+		// Close stream if provided
+		if as.s != nil {
+			as.s.stream.Close()
+		}
+	case p.listenChan <- as:
 	}
 }
 
@@ -82,40 +119,18 @@ func nilHandler(http.Header) (http.Header, bool, error) {
 	return http.Header{}, true, nil
 }
 
-func (p *spdyStreamProvider) Listen(handler streams.StreamHandler) streams.Listener {
-	if handler == nil {
-		handler = nilHandler
-	}
+func (p *spdyStreamProvider) Listen() streams.Listener {
 	return &spdyStreamListener{
 		listenChan: p.listenChan,
-		handler:    handler,
 	}
 }
 
 func (l *spdyStreamListener) Accept() (streams.Stream, error) {
-	for {
-		s := <-l.listenChan
-		if s == nil {
-			return nil, io.EOF
-		}
-		replyHeaders, accept, err := l.handler(s.Headers())
-		if err != nil {
-			// Send reply but only return original handler error
-			s.stream.SendReply(replyHeaders, !accept)
-			return nil, err
-		}
-		if !accept {
-			if err := s.stream.SendReply(replyHeaders, true); err != nil {
-				return nil, err
-			}
-			continue
-		} else {
-			if err := s.stream.SendReply(replyHeaders, false); err != nil {
-				return nil, err
-			}
-		}
-		return s, nil
+	a, ok := <-l.listenChan
+	if !ok {
+		return nil, io.EOF
 	}
+	return a.s, a.err
 }
 
 func (s *spdyStream) Read(b []byte) (int, error) {

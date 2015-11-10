@@ -55,13 +55,5 @@ type Listener interface {
 type StreamProvider interface {
 	NewStream(http.Header) (Stream, error)
 	Close() error
-	Listen(StreamHandler) Listener
+	Listen() Listener
 }
-
-// StreamHandler is a function to handle a new stream
-// by adding response headers and whether the stream
-// should be accepted. If a stream is not accepted, it
-// will not be returned by an accept on the listener.
-// Any error returned by the handler should be returned
-// on accept.
-type StreamHandler func(http.Header) (http.Header, bool, error)

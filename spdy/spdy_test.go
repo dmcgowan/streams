@@ -180,7 +180,7 @@ type endpointHandler func(streams.StreamProvider) error
 
 func runEndpoint(c net.Conn, server bool, f endpointHandler, errChan chan error) {
 	defer close(errChan)
-	provider, err := NewSpdyStreamProvider(c, server)
+	provider, err := NewSpdyStreamProvider(c, server, nil)
 	if err != nil {
 		errChan <- err
 		return
