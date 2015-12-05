@@ -22,6 +22,7 @@ type acceptStream struct {
 
 type spdyStreamListener struct {
 	listenChan <-chan acceptStream
+	closeChan  <-chan struct{}
 }
 
 type spdyStreamProvider struct {
@@ -58,11 +59,8 @@ func NewSpdyStreamProvider(conn net.Conn, server bool, handler StreamHandler) (s
 	}
 	go spdyConn.Serve(provider.newStreamHandler)
 	go func() {
-		select {
-		case <-spdyConn.CloseChan():
-		case <-provider.closeChan:
-		}
-		close(provider.listenChan)
+		<-spdyConn.CloseChan()
+		close(provider.closeChan)
 	}()
 
 	return provider, nil
@@ -87,10 +85,9 @@ func (p *spdyStreamProvider) newStreamHandler(stream *spdystream.Stream) {
 		// Not accepted, error will also be ignored
 		as.s.stream.SendReply(replyHeaders, true)
 		return
-	} else {
-		as.err = as.s.stream.SendReply(replyHeaders, false)
-		// Do no clear original stream since it is stil open on reply error
 	}
+	as.err = as.s.stream.SendReply(replyHeaders, false)
+	// Do no clear original stream since it is stil open on reply error
 
 	select {
 	case <-p.closeChan:
@@ -111,7 +108,6 @@ func (p *spdyStreamProvider) NewStream(headers http.Header) (streams.Stream, err
 }
 
 func (p *spdyStreamProvider) Close() error {
-	close(p.closeChan)
 	return p.conn.Close()
 }
 
@@ -122,15 +118,20 @@ func nilHandler(http.Header) (http.Header, bool, error) {
 func (p *spdyStreamProvider) Listen() streams.Listener {
 	return &spdyStreamListener{
 		listenChan: p.listenChan,
+		closeChan:  p.closeChan,
 	}
 }
 
 func (l *spdyStreamListener) Accept() (streams.Stream, error) {
-	a, ok := <-l.listenChan
-	if !ok {
+	select {
+	case <-l.closeChan:
 		return nil, io.EOF
+	case a, ok := <-l.listenChan:
+		if !ok {
+			return nil, io.EOF
+		}
+		return a.s, a.err
 	}
-	return a.s, a.err
 }
 
 func (s *spdyStream) Read(b []byte) (int, error) {
