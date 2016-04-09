@@ -16,7 +16,7 @@ import (
 // either end and future writes will be disallowed.
 func RunTestReset(t *testing.T, e1, e2 streams.StreamProvider) {
 	server := func(provider streams.StreamProvider) error {
-		listener := provider.Listen()
+		listener := provider.Listen(nil)
 		for {
 			stream, err := listener.Accept()
 			if err != nil {
@@ -66,7 +66,7 @@ func checkHeaderValue(h http.Header, key, expected string) error {
 // RunTestHeader tests that headers are sent and received by the provider
 func RunTestHeader(t *testing.T, e1, e2 streams.StreamProvider) {
 	server := func(provider streams.StreamProvider) error {
-		listener := provider.Listen()
+		listener := provider.Listen(nil)
 		for i := 0; ; i++ {
 			stream, err := listener.Accept()
 			if err != nil {
@@ -115,7 +115,7 @@ func RunTestHeader(t *testing.T, e1, e2 streams.StreamProvider) {
 // be read and written to.
 func RunTestReadWrite(t *testing.T, e1, e2 streams.StreamProvider) {
 	server := func(provider streams.StreamProvider) error {
-		stream, err := provider.Listen().Accept()
+		stream, err := provider.Listen(nil).Accept()
 		if err != nil {
 			return err
 		}

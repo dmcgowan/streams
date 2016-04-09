@@ -32,7 +32,7 @@ func providerPair(t *testing.T) (p1 streams.StreamProvider, p2 streams.StreamPro
 	done2 := make(chan error, 1)
 	go func() {
 		var err error
-		p2, err = NewSpdyStreamProvider(c1, true, nil)
+		p2, err = NewSpdyStreamProvider(c1, true)
 		if err != nil {
 			done1 <- err
 		}
@@ -40,7 +40,7 @@ func providerPair(t *testing.T) (p1 streams.StreamProvider, p2 streams.StreamPro
 	}()
 	go func() {
 		var err error
-		p1, err = NewSpdyStreamProvider(c2, false, nil)
+		p1, err = NewSpdyStreamProvider(c2, false)
 		if err != nil {
 			done2 <- err
 		}
